@@ -1,0 +1,26 @@
+# 環境変数・機密情報
+.env
+*.key
+secret.json
+config.local.json
+
+# OS生成ファイル
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# エディタ
+.vscode/
+.idea/
+
+# Node.js
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 課題提出規約（大容量メディア・中間ファイルの除外）
+*.mp4
+tmp/
