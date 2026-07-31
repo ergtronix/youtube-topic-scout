@@ -24,3 +24,6 @@ __pycache__/
 # 課題提出規約（大容量メディア・中間ファイルの除外）
 *.mp4
 tmp/
+
+# スライド生成の中間HTML（PNG・pptxが本体のため不要）
+output/*/images/slides/
