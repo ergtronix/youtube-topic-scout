@@ -74,9 +74,10 @@ function calcColWidths(tableData) {
       maxU[i] = Math.max(maxU[i], u);
     });
   }
-  const adj = maxU.map(u => Math.max(u, 4));
-  const tot = adj.reduce((a, b) => a + b, 0);
-  return adj.map(u => 9 * u / tot);
+  // 平方根で重み付けし、長文コメント列などが他の列の幅を過度に圧迫しないようにする
+  const weights = maxU.map(u => Math.max(Math.sqrt(Math.max(u, 4)), 2));
+  const tot = weights.reduce((a, b) => a + b, 0);
+  return weights.map(w => 9 * w / tot);
 }
 
 // ---- pptx用テキストラン構築（箇条書き・太字・斜体対応）----
