@@ -123,7 +123,8 @@ function blockToHtml(block) {
         const html = Array.isArray(c.text)
           ? c.text.map(r => r.options?.bold ? `<strong>${r.text}</strong>` : r.text).join("")
           : String(c.text);
-        return `<${tag}>${html}</${tag}>`;
+        const pt = c.options?.fontSize ?? 14;
+        return `<${tag} style="font-size:${Math.round(pt * 4 / 3)}px">${html}</${tag}>`;
       };
       return `<tr>${row.map(cellHtml).join("")}</tr>`;
     }).join("");
@@ -201,6 +202,89 @@ function parseMd(text) {
   return protos;
 }
 
+// ---- 改行のない1行が1スライド分の高さ(maxH)を超える場合、文字単位の二分探索で
+//      収まる位置まで分割する（**太字**・`コード`の途中では分割しない）----
+async function splitOversizedLine(page, line, maxH) {
+  let prefix = "";
+  let content = line;
+  if (/^#{1,6}\s+/.test(line)) { prefix = line.match(/^#{1,6}\s+/)[0]; content = line.slice(prefix.length); }
+  else if (/^\s*[-*]\s+/.test(line)) { prefix = line.match(/^\s*[-*]\s+/)[0]; content = line.slice(prefix.length); }
+
+  const measure = (text) => page.evaluate(({ html, w }) => {
+    const el = document.createElement("div");
+    el.style.cssText = `width:${w}px;position:absolute;visibility:hidden;left:-9999px;top:0;`;
+    el.innerHTML = html;
+    document.body.appendChild(el);
+    const h = el.getBoundingClientRect().height;
+    el.remove();
+    return h;
+  }, { html: `<div class="text-block"><div>${inlineHtml(text)}</div></div>`, w: W_PX });
+
+  const isSafe = (text, idx) => {
+    const head = text.slice(0, idx);
+    const bold = (head.match(/\*\*/g) || []).length;
+    const code = (head.match(/`/g) || []).length;
+    const open = (head.match(/\[/g) || []).length;
+    const close = (head.match(/\]/g) || []).length;
+    return bold % 2 === 0 && code % 2 === 0 && open === close;
+  };
+
+  const parts = [];
+  let remaining = content;
+  let isFirst = true;
+  while (remaining.length > 0) {
+    const withPrefix = t => (isFirst ? prefix : "") + t;
+    let h = await measure(withPrefix(remaining));
+    if (h <= maxH) { parts.push({ text: withPrefix(remaining), h }); break; }
+
+    let lo = 1, hi = remaining.length, bestLen = 1;
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const mh = await measure(withPrefix(remaining.slice(0, mid)));
+      if (mh <= maxH) { bestLen = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    while (bestLen > 1 && !isSafe(remaining, bestLen)) bestLen--;
+
+    const chunk = remaining.slice(0, bestLen);
+    h = await measure(withPrefix(chunk));
+    parts.push({ text: withPrefix(chunk), h });
+    remaining = remaining.slice(bestLen);
+    isFirst = false;
+  }
+  return parts;
+}
+
+// ---- ヘッダーと合わせても1行だけで1スライド分の高さ(maxRowH)を超えるテーブル行に対し、
+//      収まるまでその行だけフォントサイズ(pt)を段階的に縮小する ----
+async function shrinkRowToFit(page, headerRow, dataRow, colWidths, maxRowH) {
+  const pcts = colWidths.map(w => (w / 9 * 100).toFixed(2));
+  const cg = `<colgroup>${pcts.map(p => `<col style="width:${p}%">`).join("")}</colgroup>`;
+  const cellHtml = (c, tag, pt) => {
+    const html = Array.isArray(c.text)
+      ? c.text.map(r => r.options?.bold ? `<strong>${r.text}</strong>` : r.text).join("")
+      : String(c.text);
+    return `<${tag} style="font-size:${Math.round(pt * 4 / 3)}px">${html}</${tag}>`;
+  };
+  const measure = (pt) => page.evaluate(({ html, w }) => {
+    const el = document.createElement("div");
+    el.style.cssText = `width:${w}px;position:absolute;visibility:hidden;left:-9999px;top:0;`;
+    el.innerHTML = html;
+    document.body.appendChild(el);
+    const rows = el.querySelectorAll("tr");
+    const h = rows[rows.length - 1].getBoundingClientRect().height;
+    el.remove();
+    return h;
+  }, {
+    html: `<table>${cg}<tr>${headerRow.map(c => cellHtml(c, "th", 14)).join("")}</tr>`
+        + `<tr>${dataRow.map(c => cellHtml(c, "td", pt)).join("")}</tr></table>`,
+    w: W_PX,
+  });
+
+  let pt = 14, minPt = 9, h = await measure(pt);
+  while (h > maxRowH && pt > minPt) { pt -= 1; h = await measure(pt); }
+  return { pt, h: Math.ceil(h) };
+}
+
 // ===== Pass 2: Playwrightで全ブロックの高さを一括実測 =====
 // 返値: Map<"pi-bi", { h:number, rowHs?:number[] }>
 async function measureAll(protos) {
@@ -260,6 +344,51 @@ td { padding:6px 10px;font-size:19px;color:#111827;border:1px solid #E5E7EB;over
       result.set(`${pi}-${bi}`, entry);
     }
   }
+  // ---- ヘッダーと合わせても1行だけで1スライド分の高さを超えるテーブル行は、
+  //      収まるまでその行のフォントサイズを段階的に縮小する ----
+  for (let pi = 0; pi < protos.length; pi++) {
+    for (let bi = 0; bi < protos[pi].blocks.length; bi++) {
+      const block = protos[pi].blocks[bi];
+      if (block.type !== "table") continue;
+      const entry = result.get(`${pi}-${bi}`);
+      const headerH = entry.rowHs[0];
+      for (let ri = 1; ri < block.tableData.length; ri++) {
+        if (headerH + entry.rowHs[ri] <= C_H_PX) continue;
+        const { pt, h } = await shrinkRowToFit(page, block.tableData[0], block.tableData[ri], block.colWidths, C_H_PX - headerH);
+        for (const cell of block.tableData[ri]) cell.options = { ...cell.options, fontSize: pt };
+        entry.rowHs[ri] = h;
+        console.log(`縮小: セクション${pi}テーブル行${ri}のフォントを${pt}ptに縮小して高さ超過を解消`);
+      }
+    }
+  }
+
+  // ---- 1行だけで1スライド分の高さ(C_H_PX)を超えるテキスト行を、文字単位で再分割 ----
+  for (let pi = 0; pi < protos.length; pi++) {
+    for (let bi = 0; bi < protos[pi].blocks.length; bi++) {
+      const block = protos[pi].blocks[bi];
+      if (block.type !== "text") continue;
+      const entry = result.get(`${pi}-${bi}`);
+      let changed = false;
+      const newLines = [], newLineHs = [];
+      for (let li = 0; li < block.lines.length; li++) {
+        const line = block.lines[li];
+        const h = entry.lineHs[li];
+        if (h <= C_H_PX || !line.trim()) {
+          newLines.push(line); newLineHs.push(h);
+        } else {
+          changed = true;
+          const parts = await splitOversizedLine(page, line, C_H_PX);
+          for (const p of parts) { newLines.push(p.text); newLineHs.push(p.h); }
+        }
+      }
+      if (changed) {
+        block.lines = newLines;
+        entry.lineHs = newLineHs;
+        console.log(`分割: セクション${pi}ブロック${bi}の1行が高さ超過のため${newLines.length}行に再分割`);
+      }
+    }
+  }
+
   await browser.close();
   console.log(`測定完了: ${result.size}ブロック`);
   return result;
