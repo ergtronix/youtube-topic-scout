@@ -24,6 +24,16 @@ YouTube新ジャンル発掘のためのマルチエージェントシステム�
 
 ---
 
+## 生成済みサンプル（2026-07-31実行分）
+
+GitHubはpptxファイルをブラウザ内でプレビューできません。ファイルページ（Preview not available）を開いて「名前を付けて保存」するとページのHTMLごと保存されてしまうため、必ず以下のリンクから直接ダウンロードしてください。
+
+- 比較スライド（PowerPoint）: [genre-scout.pptx をダウンロード](https://raw.githubusercontent.com/ergtronix/youtube-topic-scout/main/output/20260731/slides/genre-scout.pptx)
+- 比較表（Markdown、ブラウザでそのまま閲覧可）: [scorecard.md](output/20260731/scorecard.md)
+- スライド画像（PNG、ブラウザでそのまま閲覧可）: [表紙スライド](output/20260731/images/slide-01.png)
+
+---
+
 ## 技術スタック
 
 | 項目 | 内容 |
